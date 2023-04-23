@@ -5,7 +5,7 @@ import numpy as np
 from CV7062610.layers import *
 from CV7062610.layer_utils import *
 
-from numba import jit
+from numba import cuda
 
 class TwoLayerNet(object):
     """
@@ -210,14 +210,16 @@ class FullyConnectedNet(object):
 
         self.params['W1'] = np.random.normal(0,weight_scale,(input_dim,hidden_dims[0]))
         self.params['b1'] = np.zeros(hidden_dims[0])
-        #self.params['gamma1'] = np.ones(hidden_dims[0])
-        #self.params['beta1'] = np.zeros(hidden_dims[0])
+        if self.normalization != None:
+          self.params['gamma1'] = np.ones(hidden_dims[0])
+          self.params['beta1'] = np.zeros(hidden_dims[0])
         
         for i in range(1,len(hidden_dims)):
             self.params['W'+str(i+1)] = np.random.normal(0,weight_scale,(hidden_dims[i-1],hidden_dims[i]))
             self.params['b'+str(i+1)] = np.zeros(hidden_dims[i])
-            #self.params['gamma'+str(i+1)] = np.ones(hidden_dims[i])
-            #self.params['beta'+str(i+1)] = np.zeros(hidden_dims[i])
+            if self.normalization != None:
+              self.params['gamma'+str(i+1)] = np.ones(hidden_dims[i])
+              self.params['beta'+str(i+1)] = np.zeros(hidden_dims[i])
             
 
 
@@ -286,13 +288,19 @@ class FullyConnectedNet(object):
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         scores = X
         caches = []
+        
         for i in range(self.num_layers-1):
           scores,cache1 = affine_forward(scores,self.params['W'+str(i+1)],self.params['b'+str(i+1)])
-          
-          #batch/layer norm
-          scores,cache2 = relu_forward(scores)
+          if self.normalization != None:
+            scores,cache2 = bachnorm_foward(scores,self.params['gamma'+str(i+1)],self.params['beta'+str(i+1)],bn_params=self.bn_params[i])
+          else:
+              cache2 = ()
+          scores,cache3 = relu_forward(scores)
           #dropout
-          caches.append((cache1,cache2))
+         
+          caches.append((cache1,cache2,cache3))
+          
+             
         
         scores, last_cache = affine_forward(scores,self.params['W'+str(self.num_layers)],self.params['b'+str(self.num_layers)])
 
@@ -325,13 +333,16 @@ class FullyConnectedNet(object):
 
         loss,dx = softmax_loss(scores,y)
         loss += np.sum((self.reg/2)*self.params['W'+str(self.num_layers)]**2)
+        
         dx,grads['W'+str(self.num_layers)],grads['b'+str(self.num_layers)]=affine_backward(dx,last_cache)
         grads['W'+str(self.num_layers)] += self.reg*self.params['W'+str(self.num_layers)]
 
         for i in range(self.num_layers-1,0,-1):
           
           loss += np.sum((self.reg/2)*self.params['W'+str(i)]**2)
-          dx = relu_backward(dx,caches[i-1][1])
+          dx = relu_backward(dx,caches[i-1][2])
+          if self.normalization != None:
+              dx,grads['gamma'+str(i)],grads['beta'+str(i)] = bachnorm_backward(dx,caches[i-1][1])
           dx,grads['W'+str(i)],grads['b'+str(i)]=affine_backward(dx,caches[i-1][0])
           grads['W'+str(i)] += self.reg*self.params['W'+str(i)]
           

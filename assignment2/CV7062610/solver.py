@@ -11,6 +11,7 @@ import numpy as np
 
 from CV7062610 import optim
 
+from numba import jit, prange
 
 class Solver(object):
     """
@@ -250,7 +251,7 @@ class Solver(object):
         acc = np.mean(y_pred == y)
 
         return acc
-
+    @jit(parallel=True)
     def train(self):
         """
         Run optimization to train the model.
@@ -259,7 +260,8 @@ class Solver(object):
         iterations_per_epoch = max(num_train // self.batch_size, 1)
         num_iterations = self.num_epochs * iterations_per_epoch
 
-        for t in range(num_iterations):
+        #for t in range(num_iterations):
+        for t in prange(num_iterations):
             self._step()
 
             # Maybe print training loss

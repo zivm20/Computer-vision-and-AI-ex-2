@@ -1,13 +1,13 @@
 # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
 pass
-from numba import jit
+from numba import njit
 
 # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 from CV7062610.layers import *
 from CV7062610.fast_layers import *
 
-@jit(nopython=True)
+
 def affine_relu_forward(x, w, b):
     """
     Convenience layer that perorms an affine transform followed by a ReLU
@@ -25,7 +25,7 @@ def affine_relu_forward(x, w, b):
     cache = (fc_cache, relu_cache)
     return out, cache
 
-@jit(nopython=True)
+
 def affine_relu_backward(dout, cache):
     """
     Backward pass for the affine-relu convenience layer

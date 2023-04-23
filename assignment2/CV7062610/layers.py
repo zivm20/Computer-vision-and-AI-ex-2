@@ -1,8 +1,8 @@
 from builtins import range
 import numpy as np
-from numba import jit
+from numba import njit
 
-@jit(nopython=True)
+@njit(parallel=True)
 def affine_forward(x, w, b):
     """
     Computes the forward pass for an affine (fully-connected) layer.
@@ -29,8 +29,8 @@ def affine_forward(x, w, b):
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
     #reshape x into the (N,D) and then compute the output using matrix multiplication
-    out = np.reshape(x,(x.shape[0],w.shape[0])) @ w
-    out+= b
+    out = (np.reshape(x,(x.shape[0],w.shape[0])) @ w) + b
+    
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -39,7 +39,7 @@ def affine_forward(x, w, b):
     cache = (x, w, b)
     return out, cache
 
-@jit(nopython=True)
+@njit(parallel=True)
 def affine_backward(dout, cache):
     """
     Computes the backward pass for an affine layer.
@@ -82,7 +82,7 @@ def affine_backward(dout, cache):
     ###########################################################################
     return dx, dw, db
 
-@jit(nopython=True)
+@njit(parallel=True)
 def relu_forward(x):
     """
     Computes the forward pass for a layer of rectified linear units (ReLUs).
@@ -109,7 +109,7 @@ def relu_forward(x):
     cache = x
     return out, cache
 
-@jit(nopython=True)
+@njit(parallel=True)
 def relu_backward(dout, cache):
     """
     Computes the backward pass for a layer of rectified linear units (ReLUs).
@@ -126,9 +126,9 @@ def relu_backward(dout, cache):
     # TODO: Implement the ReLU backward pass.                                 #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    #dout/dx = dout/dReLu * dRelu/dx
+    
     dx = dout * (x>=0)
-    #dx[x<=0] = 0
+    
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -137,11 +137,11 @@ def relu_backward(dout, cache):
     return dx
 
 
-@jit(nopython=True)
+@njit(parallel=True)
 def sum_axis0(x):
     return np.ones(x.shape[0])@x
 
-@jit(nopython=True)
+@njit(parallel=True)
 def bachnorm_foward_train_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momentum):
     curr_mean = sum_axis0(x)/x.shape[0]
     curr_var = sum_axis0(((x-curr_mean)**2))/x.shape[0]
@@ -160,7 +160,7 @@ def bachnorm_foward_train_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,mome
 
 
 
-@jit(nopython=True)
+@njit(parallel=True)
 def bachnorm_foward_test_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momentum):
     std = np.sqrt(train_var+eps)
     x_center = x-train_mean
@@ -199,7 +199,7 @@ def bachnorm_foward(x:np.ndarray,gamma,beta,bn_params):
         
     return out, cache
 
-@jit(nopython=True)
+@njit(parallel=True)
 def bachnorm_backward(dout,cache):
     x_norm, x_centered, std, gamma = cache
     dgamma = sum_axis0(dout*x_norm)
@@ -250,7 +250,6 @@ def conv_forward_naive(x, w, b, conv_param):
     x_pad = np.copy(x)
     x_pad = np.pad(x_pad,((0,0),(0,0),(pad,pad),(pad,pad)),'constant', constant_values=0)
     for n in range(out.shape[0]):
-        p = []
         for f in range(out.shape[1]):
             for o_H in range(out.shape[2]):
                 for o_W in range(out.shape[3]): 
@@ -290,7 +289,34 @@ def conv_backward_naive(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    x_pad,w,b,conv_param = cache
+    pad = conv_param["pad"]
+    stride = conv_param["stride"]
+    x = x_pad 
+    if pad>0:
+        x=x[:,:,pad:-pad,pad:-pad]
+
+    dw = np.zeros_like(w)
+    dx = np.zeros_like(x)
+    db = np.zeros_like(b)
+
+    
+    
+    
+    for F in range(w.shape[0]):
+        for N in range(dout.shape[0]):
+            
+            for H in range(dout.shape[2]):
+                for W in range(dout.shape[3]):
+                    for C in range(w.shape[1]):
+                        for HH in range( w.shape[2]):
+                            for WW in range(w.shape[3]):
+                            
+                                dw[F,C,HH,WW] = dw[F,C,HH,WW] + dout[N,F,H,W]*x_pad[N,C,H*stride + HH,W*stride + WW]
+                                
+                                if HH + H*stride - pad >= 0 and HH + H*stride  - pad < x.shape[2] and WW + W*stride - pad >= 0 and WW + W*stride - pad < x.shape[3]:
+                                    dx[N,C,H*stride+HH - pad,W*stride+WW - pad] = dx[N,C,H*stride+HH - pad,W*stride+WW - pad] + dout[N,F,H,W]*w[F,C, HH, WW]
+                    db[F] = db[F]+dout[N,F,H,W]
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -323,8 +349,16 @@ def max_pool_forward_naive(x, pool_param):
     # TODO: Implement the max-pooling forward pass                            #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    pH = pool_param["pool_height"]
+    pW = pool_param["pool_width"]
+    stride = pool_param["stride"]
+    out = np.zeros((x.shape[0],x.shape[1],1+(x.shape[2]-pH)//stride,1+(x.shape[3]-pW)//stride))
 
-    pass
+    for n in range(out.shape[0]):
+        for c in range(out.shape[1]):
+            for h in range(out.shape[2]):
+                for w in range(out.shape[3]):
+                    out[n,c,h,w] = np.max(x[n,c,h*stride:h*stride+pH,w*stride:w*stride+pW])
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -350,16 +384,58 @@ def max_pool_backward_naive(dout, cache):
     # TODO: Implement the max-pooling backward pass                           #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    
+    x, pool_param = cache
+    dx = np.zeros_like(x)
+    pH = pool_param['pool_height']
+    pW = pool_param['pool_width']
+    stride = pool_param['stride']
+    
+    for n in range(dout.shape[0]):
+        for c in range(dout.shape[1]):
+            for h in range(dout.shape[2]):
+                for w in range(dout.shape[3]):
+                    pool = x[n,c,h*stride:h*stride+pH,w*stride:w*stride+pW]
+                    mask = pool==np.max(pool)
+                    
+                    dx[n,c,h*stride:h*stride+pH,w*stride:w*stride+pW] += mask * dout[n,c,h,w]
+                    
+    """
+    x, pool_param = cache
+    N, C, H, W = x.shape
+    pool_height = pool_param['pool_height']
+    pool_width = pool_param['pool_width']
+    stride = pool_param['stride']
 
-    pass
+    dx2 = np.zeros((N, C, H, W))
+    H_out = 1 + (H - pool_height) / stride
+    W_out = 1 + (W - pool_width) / stride
 
+    for i in range(0, N):
+        x_data = x[i]
+
+        xx, yy = -1, -1
+        for j in range(0, H-pool_height+1, stride):
+            yy += 1
+            for k in range(0, W-pool_width+1, stride):
+                xx += 1
+                x_rf = x_data[:, j:j+pool_height, k:k+pool_width]
+                for l in range(0, C):
+                    x_pool = x_rf[l]
+                    mask = x_pool == np.max(x_pool)
+                    dx2[i, l, j:j+pool_height, k:k+pool_width] += dout[i, l, yy, xx] * mask
+
+            xx = -1
+    
+    print(dx-dx2)
+    """
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
     return dx
 
-@jit(nopython=True)
+@njit(parallel=True)
 def softmax_loss(x, y):
     """
     Computes the loss and gradient for softmax classification.

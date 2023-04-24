@@ -2,7 +2,7 @@ from builtins import range
 import numpy as np
 from numba import njit
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def affine_forward(x, w, b):
     """
     Computes the forward pass for an affine (fully-connected) layer.
@@ -29,6 +29,7 @@ def affine_forward(x, w, b):
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
     #reshape x into the (N,D) and then compute the output using matrix multiplication
+    
     out = (np.reshape(x,(x.shape[0],w.shape[0])) @ w) + b
     
 
@@ -39,7 +40,7 @@ def affine_forward(x, w, b):
     cache = (x, w, b)
     return out, cache
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def affine_backward(dout, cache):
     """
     Computes the backward pass for an affine layer.
@@ -82,7 +83,7 @@ def affine_backward(dout, cache):
     ###########################################################################
     return dx, dw, db
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def relu_forward(x):
     """
     Computes the forward pass for a layer of rectified linear units (ReLUs).
@@ -109,7 +110,7 @@ def relu_forward(x):
     cache = x
     return out, cache
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def relu_backward(dout, cache):
     """
     Computes the backward pass for a layer of rectified linear units (ReLUs).
@@ -137,11 +138,11 @@ def relu_backward(dout, cache):
     return dx
 
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def sum_axis0(x):
     return np.ones(x.shape[0])@x
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def bachnorm_foward_train_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momentum):
     curr_mean = sum_axis0(x)/x.shape[0]
     curr_var = sum_axis0(((x-curr_mean)**2))/x.shape[0]
@@ -160,7 +161,7 @@ def bachnorm_foward_train_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,mome
 
 
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def bachnorm_foward_test_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momentum):
     std = np.sqrt(train_var+eps)
     x_center = x-train_mean
@@ -199,7 +200,7 @@ def bachnorm_foward(x:np.ndarray,gamma,beta,bn_params):
         
     return out, cache
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def bachnorm_backward(dout,cache):
     x_norm, x_centered, std, gamma = cache
     dgamma = sum_axis0(dout*x_norm)
@@ -435,7 +436,7 @@ def max_pool_backward_naive(dout, cache):
     ###########################################################################
     return dx
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def softmax_loss(x, y):
     """
     Computes the loss and gradient for softmax classification.

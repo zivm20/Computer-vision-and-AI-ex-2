@@ -29,6 +29,48 @@ For efficiency, update rules may perform in-place updates, mutating w and
 setting next_w equal to w.
 """
 
+def adam(w, dw, config=None):
+    """
+    adam gradient decent.
+    
+    config format:
+    - learning_rate: Scalar learning rate.
+    """
+    if config is None:
+        config = {}
+    config.setdefault("b1", 0.5)
+    config.setdefault("b2", 0.5)
+    config.setdefault("m",0)
+    config.setdefault("v",0)
+    
+    config.setdefault("learning_rate", 1e-2)
+    config.setdefault("epsilon", 1e-12)
+    
+    lr = config["learning_rate"]
+    eps = config["epsilon"]
+    m = config["m"]
+    v = config["v"]
+    b1 = config["b1"]
+    b2 = config["b2"]
+    
+
+
+    m = b1 * m + (1 - b1) * dw
+    v = b2 * v + (1 - b2) * (dw**2)
+    m_hat = m / (1 - b1)
+    v_hat = v / (1 - b2)
+    next_w = w - lr * m_hat / (np.sqrt(v_hat) + eps)
+
+    config["m"] = m
+    config["v"] = v
+    config["b1"] = b1*b1
+    config["b2"] = b2*b2
+
+
+    return next_w,config
+
+
+    
 
 def sgd(w, dw, config=None):
     """

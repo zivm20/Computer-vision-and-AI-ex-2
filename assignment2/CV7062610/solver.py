@@ -251,7 +251,7 @@ class Solver(object):
         acc = np.mean(y_pred == y)
 
         return acc
-    @jit(parallel=True)
+    #@jit(parallel=True)
     def train(self):
         """
         Run optimization to train the model.

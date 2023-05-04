@@ -27,7 +27,7 @@ from numpy import ndarray
 
 
 
-def cov(x_pad, w, b,stride,out):
+def cov(x_pad, w, b,stride,out, retCupy=False):
     for o_H in range(out.shape[2]):
         for o_W in range(out.shape[3]): 
             out[:,:,o_H,o_W] = cp.einsum('nchw, fchw -> nf',x_pad[:,:,stride*o_H:stride*o_H+w.shape[2],stride*o_W:stride*o_W+w.shape[3]],w)
@@ -35,7 +35,7 @@ def cov(x_pad, w, b,stride,out):
         out[:,F,:,:] = out[:,F,:,:] + b[F] 
     return out
         
-def conv_forward_strides(x, w, b, conv_param):
+def conv_forward_strides(x, w, b, conv_param, retCupy=False):
     
     retNumpy = isinstance(x,ndarray)
     if retNumpy and not usingNumpy:
@@ -65,7 +65,7 @@ def conv_forward_strides(x, w, b, conv_param):
     out = cp.zeros((N,F,out_h,out_w))
     out = cov(x_padded, w, b, stride,out)
     
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         out = asnumpy(out)
         x_padded = asnumpy(x_padded)
         w = asnumpy(w)
@@ -75,7 +75,7 @@ def conv_forward_strides(x, w, b, conv_param):
     return out, cache
 
 
-def conv_backward_strides(dout,cache):
+def conv_backward_strides(dout,cache, retCupy=False):
     """
     A naive implementation of the backward pass for a convolutional layer.
 
@@ -130,7 +130,7 @@ def conv_backward_strides(dout,cache):
     
     db = cp.sum(dout, axis=(0, 2, 3))
 
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         dx = asnumpy(dx)
         dw = asnumpy(dw)
         db = asnumpy(db)
@@ -149,7 +149,7 @@ conv_forward_fast = conv_forward_strides
 conv_backward_fast = conv_backward_strides
 
 
-def max_pool_forward_fast(x, pool_param):
+def max_pool_forward_fast(x, pool_param, retCupy=False):
     """
     A fast implementation of the forward pass for a max pooling layer.
 
@@ -173,7 +173,7 @@ def max_pool_forward_fast(x, pool_param):
             out[:,:,o_H,o_W] = cp.max(cp.max(x[:,:,o_H*stride:o_H*stride + pool_height, o_W*stride:o_W*stride + pool_width],axis=2),axis=2)
             
             
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         out = cp.asnumpy(out)
         x = cp.asnumpy(x)
 
@@ -181,7 +181,71 @@ def max_pool_forward_fast(x, pool_param):
     return out, (x,pool_param)
 
 
-def max_pool_backward_fast(dout, cache):
+
+
+def relu_forward_fast(x, retCupy=False):
+    """
+    Computes the forward pass for a layer of rectified linear units (ReLUs).
+
+    Input:
+    - x: Inputs, of any shape
+
+    Returns a tuple of:
+    - out: Output, of the same shape as x
+    - cache: x
+    """
+    out = None
+    ###########################################################################
+    # TODO: Implement the ReLU forward pass.                                  #
+    ###########################################################################
+    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    retNumpy = isinstance(x,ndarray)
+    if retNumpy and not usingNumpy:
+        x = cp.array(x)
+
+    out = cp.maximum(x,0)
+
+    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    ###########################################################################
+    #                             END OF YOUR CODE                            #
+    ###########################################################################
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
+        x = asnumpy(x)
+        out = asnumpy(x)
+
+    cache = x
+    return out, cache
+
+#@njit(parallel=True)
+def relu_backward_fast(dout, cache, retCupy=False):
+    """
+    Computes the backward pass for a layer of rectified linear units (ReLUs).
+
+    Input:
+    - dout: Upstream derivatives, of any shape
+    - cache: Input x, of same shape as dout
+
+    Returns:
+    - dx: Gradient with respect to x
+    """
+    dx, x = None, cache
+    
+    retNumpy = isinstance(dout,ndarray)
+    if retNumpy and not usingNumpy:
+        x = cp.array(x)
+        dout = cp.array(dout)
+    
+    dx = dout * (x>=0)
+
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
+        dx = asnumpy(dx)
+
+  
+    return dx
+
+
+
+def max_pool_backward_fast(dout, cache, retCupy=False):
     """
     A fast implementation of the backward pass for a max pooling layer.
 
@@ -192,7 +256,7 @@ def max_pool_backward_fast(dout, cache):
     retNumpy = isinstance(dout,ndarray)
     if retNumpy and not usingNumpy:
         x = cp.array(x)
-        dout = cp.array(x)
+        dout = cp.array(dout)
     
     
     dx = cp.zeros_like(x)
@@ -203,11 +267,11 @@ def max_pool_backward_fast(dout, cache):
     for H in range(dout.shape[2]):
         for W in range(dout.shape[3]):
             pool = x[:,:,H*stride:H*stride + pH, W*stride:W*stride + pW]
-                    
+            
             mask = (pool == cp.max(cp.max(pool, axis=3, keepdims=True),axis=2,keepdims=True))
-            dx[:,:,H*stride:H*stride+pH,W*stride:W*stride+pW]+= mask*dout[:,:,H,W][:,:,cp.newaxis,cp.newaxis]
+            dx[:,:,H*stride:H*stride+pH,W*stride:W*stride+pW] += mask*dout[:,:,H,W][:,:,cp.newaxis,cp.newaxis]
     
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         dx = asnumpy(dx)
 
     return dx
@@ -220,7 +284,7 @@ def max_pool_backward_fast(dout, cache):
 
 
 
-def affine_forward_fast(x, w, b):
+def affine_forward_fast(x, w, b, retCupy=False):
     """
     Computes the forward pass for an affine (fully-connected) layer.
 
@@ -260,7 +324,7 @@ def affine_forward_fast(x, w, b):
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         x = asnumpy(x)
         w = asnumpy(w)
         b = asnumpy(b)
@@ -270,7 +334,7 @@ def affine_forward_fast(x, w, b):
     return out, cache
 
 #@njit(parallel=True)
-def affine_backward_fast(dout, cache):
+def affine_backward_fast(dout, cache, retCupy=False):
     """
     Computes the backward pass for an affine layer.
 
@@ -292,7 +356,7 @@ def affine_backward_fast(dout, cache):
     if retNumpy and not usingNumpy:
         x = cp.array(x)
         w = cp.array(w)
-        #b = cp.array(b)
+        
         dout = cp.array(x)
 
 
@@ -314,7 +378,7 @@ def affine_backward_fast(dout, cache):
     # dz/dx = w
     dx = cp.reshape(dout@w.T,x.shape)#/dout.shape[1]
     
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         dx = asnumpy(dx)
         dw = asnumpy(dw)
         db = asnumpy(db)
@@ -326,7 +390,7 @@ def affine_backward_fast(dout, cache):
     return dx, dw, db
 
 #@njit(parallel=True)
-def relu_forward_fast(x):
+def relu_forward_fast(x, retCupy=False):
     """
     Computes the forward pass for a layer of rectified linear units (ReLUs).
 
@@ -348,7 +412,7 @@ def relu_forward_fast(x):
 
     out = cp.maximum(x,0)
 
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         x = asnumpy(x)
        
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -359,7 +423,7 @@ def relu_forward_fast(x):
     return out, cache
 
 #@njit(parallel=True)
-def relu_backward_fast(dout, cache):
+def relu_backward_fast(dout, cache, retCupy=False):
     """
     Computes the backward pass for a layer of rectified linear units (ReLUs).
 
@@ -383,7 +447,7 @@ def relu_backward_fast(dout, cache):
     dx = dout * (x>=0)
     
     
-    if retNumpy and not usingNumpy:
+    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
         dx = asnumpy(dx)
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################

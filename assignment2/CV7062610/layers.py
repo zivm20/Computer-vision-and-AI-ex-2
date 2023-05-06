@@ -1,8 +1,8 @@
 from builtins import range
 import numpy as np
-from numba import njit
 
-#@njit(parallel=True)
+
+
 def affine_forward(x, w, b):
     """
     Computes the forward pass for an affine (fully-connected) layer.
@@ -40,7 +40,7 @@ def affine_forward(x, w, b):
     cache = (x, w, b)
     return out, cache
 
-#@njit(parallel=True)
+
 def affine_backward(dout, cache):
     """
     Computes the backward pass for an affine layer.
@@ -83,7 +83,7 @@ def affine_backward(dout, cache):
     ###########################################################################
     return dx, dw, db
 
-#@njit(parallel=True)
+
 def relu_forward(x):
     """
     Computes the forward pass for a layer of rectified linear units (ReLUs).
@@ -110,7 +110,7 @@ def relu_forward(x):
     cache = x
     return out, cache
 
-#@njit(parallel=True)
+
 def relu_backward(dout, cache):
     """
     Computes the backward pass for a layer of rectified linear units (ReLUs).
@@ -138,19 +138,23 @@ def relu_backward(dout, cache):
     return dx
 
 
-#@njit(parallel=True)
+#sum of x over the 0 axis, used for numba jit to run faster
 def sum_axis0(x):
     return np.ones(x.shape[0])@x
 
-#@njit(parallel=True)
+
 def bachnorm_foward_train_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momentum):
+    #calc current mean, var std
     curr_mean = sum_axis0(x)/x.shape[0]
     curr_var = sum_axis0(((x-curr_mean)**2))/x.shape[0]
+    std = np.sqrt(curr_var+eps)
 
+    #update the train mean and train var for the test part
     train_mean = momentum * train_mean + (1-momentum)*curr_mean
     train_var = momentum * train_var + (1-momentum)*curr_var
     
-    std = np.sqrt(curr_var+eps)
+    
+    #center the input, normalize it, and finally scale and move it
     x_center = x-curr_mean
     x_norm = x_center/std
     out = gamma*x_norm+beta
@@ -161,9 +165,11 @@ def bachnorm_foward_train_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,mome
 
 
 
-#@njit(parallel=True)
+
 def bachnorm_foward_test_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momentum):
     std = np.sqrt(train_var+eps)
+    
+    #center the input, normalize it, and finally scale and move it
     x_center = x-train_mean
     x_norm = x_center/std
     out = gamma*x_norm+beta
@@ -172,37 +178,30 @@ def bachnorm_foward_test_(x:np.ndarray,gamma,beta,train_mean,train_var,eps,momen
 
     return out, cache
 
+#bachnorm layer
 def bachnorm_foward(x:np.ndarray,gamma,beta,bn_params):
+    
     mode=bn_params.get('mode',None)
     train_mean=bn_params.get('train_mean',np.zeros(x.shape[1]))
     train_var=bn_params.get('train_var',np.zeros(x.shape[1]))
     eps=bn_params.get('eps',1e-5)
     momentum=bn_params.get('momentum',0.9)
+    
+    
     if mode == 'train':
         out, cache, train_mean, train_var = bachnorm_foward_train_(x,gamma,beta,train_mean,train_var,eps,momentum)
         bn_params['train_mean'] = train_mean
         bn_params['train_var'] = train_var
-    elif mode == 'check':
-        curr_mean = sum_axis0(x)/x.shape[0]
-        curr_var = sum_axis0(((x-curr_mean)**2))/x.shape[0]
-
-        train_mean = curr_mean
-        train_var = curr_var
-
-        std = np.sqrt(train_var+eps)
-        x_center = x-train_mean
-        x_norm = x_center/std
-        out = gamma*x_norm+beta
-
-        cache = (x_norm,x_center,std,gamma)
     else:
         out, cache = bachnorm_foward_test_(x,gamma,beta,train_mean,train_var,eps,momentum)
         
     return out, cache
 
-#@njit(parallel=True)
+
 def bachnorm_backward(dout,cache):
     x_norm, x_centered, std, gamma = cache
+
+    #calculate the derivative as learned in the practices
     dgamma = sum_axis0(dout*x_norm)
     dbeta = sum_axis0(dout)
     dx_norm = dout*gamma
@@ -249,18 +248,29 @@ def conv_forward_naive(x, w, b, conv_param):
     stride = conv_param["stride"]
     out = np.zeros((x.shape[0],w.shape[0],1+(x.shape[2]+2*pad-w.shape[2])//stride,1+(x.shape[3]+2*pad-w.shape[3])//stride))
     x_pad = np.copy(x)
+    
+    #pad x
     x_pad = np.pad(x_pad,((0,0),(0,0),(pad,pad),(pad,pad)),'constant', constant_values=0)
+
+    #for every sample and filter
     for n in range(out.shape[0]):
         for f in range(out.shape[1]):
+
+            #every element in the out[n,f] matrix
             for o_H in range(out.shape[2]):
                 for o_W in range(out.shape[3]): 
+                    out[n,f,o_H,o_W]+= b[f]
+
+                    #sum for all channels
                     for c in range(x_pad.shape[1]): 
+
+                        #sum product of each element in the window and corrisponding element in X
                         for hh in range(0,w.shape[2]):
                             for ww in range(0,w.shape[3]):
                                 
-                                #o_W*stride+(w_W-1)//2 
+                                
                                 out[n,f,o_H,o_W] += x_pad[n,c,stride*o_H+hh,stride*o_W+ww] * w[f,c,hh,ww]
-                    out[n,f,o_H,o_W]+= b[f]
+                    
                         
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -294,6 +304,7 @@ def conv_backward_naive(dout, cache):
     pad = conv_param["pad"]
     stride = conv_param["stride"]
     x = x_pad 
+    #un-pad x
     if pad>0:
         x=x[:,:,pad:-pad,pad:-pad]
 
@@ -303,18 +314,22 @@ def conv_backward_naive(dout, cache):
 
     
     
-    
-    for F in range(w.shape[0]):
-        for N in range(dout.shape[0]):
-            
+    #for each sample and filter
+    for N in range(dout.shape[0]):
+        for F in range(dout.shape[1]):
+        
+            #for each element in the resulting dout[N,F]
             for H in range(dout.shape[2]):
                 for W in range(dout.shape[3]):
+
+                    #for each channel and element in the window
                     for C in range(w.shape[1]):
                         for HH in range( w.shape[2]):
                             for WW in range(w.shape[3]):
-                            
+                                #sum up the product dout[N,F,H,W] and the appropriate value we multiplied with x_pad, that is the value x_pad[N,C,H*stride + HH,W*stride + WW]
                                 dw[F,C,HH,WW] = dw[F,C,HH,WW] + dout[N,F,H,W]*x_pad[N,C,H*stride + HH,W*stride + WW]
                                 
+                                #check that we are in range of X and not in the padded area
                                 if HH + H*stride - pad >= 0 and HH + H*stride  - pad < x.shape[2] and WW + W*stride - pad >= 0 and WW + W*stride - pad < x.shape[3]:
                                     dx[N,C,H*stride+HH - pad,W*stride+WW - pad] = dx[N,C,H*stride+HH - pad,W*stride+WW - pad] + dout[N,F,H,W]*w[F,C, HH, WW]
                     db[F] = db[F]+dout[N,F,H,W]
@@ -354,11 +369,16 @@ def max_pool_forward_naive(x, pool_param):
     pW = pool_param["pool_width"]
     stride = pool_param["stride"]
     out = np.zeros((x.shape[0],x.shape[1],1+(x.shape[2]-pH)//stride,1+(x.shape[3]-pW)//stride))
-
+    
+    #for all samples and channels
     for n in range(out.shape[0]):
         for c in range(out.shape[1]):
+
+            #for all elements in the matrix out[n,c]
             for h in range(out.shape[2]):
                 for w in range(out.shape[3]):
+                    
+                    #get the max element in the correct window
                     out[n,c,h,w] = np.max(x[n,c,h*stride:h*stride+pH,w*stride:w*stride+pW])
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -392,44 +412,23 @@ def max_pool_backward_naive(dout, cache):
     pW = pool_param['pool_width']
     stride = pool_param['stride']
     
+    #for all samples and channels
     for n in range(dout.shape[0]):
         for c in range(dout.shape[1]):
+
+            #for all elements in the matrix dout[n,c]
             for h in range(dout.shape[2]):
                 for w in range(dout.shape[3]):
+
+                    #current submatrix window
                     pool = x[n,c,h*stride:h*stride+pH,w*stride:w*stride+pW]
+                    #apply a mask over it such that only the max element is equal to 1, the rest is 0
                     mask = pool==np.max(pool)
                     
+                    #add to the window in dx the values from the product between mask and the maximum value
                     dx[n,c,h*stride:h*stride+pH,w*stride:w*stride+pW] += mask * dout[n,c,h,w]
                     
-    """
-    x, pool_param = cache
-    N, C, H, W = x.shape
-    pool_height = pool_param['pool_height']
-    pool_width = pool_param['pool_width']
-    stride = pool_param['stride']
-
-    dx2 = np.zeros((N, C, H, W))
-    H_out = 1 + (H - pool_height) / stride
-    W_out = 1 + (W - pool_width) / stride
-
-    for i in range(0, N):
-        x_data = x[i]
-
-        xx, yy = -1, -1
-        for j in range(0, H-pool_height+1, stride):
-            yy += 1
-            for k in range(0, W-pool_width+1, stride):
-                xx += 1
-                x_rf = x_data[:, j:j+pool_height, k:k+pool_width]
-                for l in range(0, C):
-                    x_pool = x_rf[l]
-                    mask = x_pool == np.max(x_pool)
-                    dx2[i, l, j:j+pool_height, k:k+pool_width] += dout[i, l, yy, xx] * mask
-
-            xx = -1
     
-    print(dx-dx2)
-    """
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -450,7 +449,7 @@ def softmax_loss(x, y):
     Returns a tuple of:
     - loss: Scalar giving the loss
     - dx: Gradient of the loss with respect to x
-    
+    """
     shifted_logits = x - np.max(x, axis=1, keepdims=True)
     Z = np.sum(np.exp(shifted_logits), axis=1, keepdims=True)
     log_probs = shifted_logits - np.log(Z)
@@ -460,15 +459,5 @@ def softmax_loss(x, y):
     dx = probs.copy()
     dx[np.arange(N), y] -= 1
     dx /= N
-    """
-    
-    target = np.eye(x.shape[1])[y]
-    s = np.exp(x)
-    probs = (s.T*(1/np.sum(s,axis=1))).T
-    
-    
-    
-    loss = -np.sum(np.log(probs)*target) / x.shape[0]
-    dx = (probs.copy()-target)/x.shape[0]
-   
     return loss, dx
+   

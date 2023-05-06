@@ -35,11 +35,14 @@ def adam(w, dw, config=None):
     
     config format:
     - learning_rate: Scalar learning rate.
+    - epsilon: Scalar epsilon
+    - b1: Exponential  decay rate 1, should be 0 < b1 < 1
+    - b2: Moving average param 2, should be 0 < b2 < 1
     """
     if config is None:
         config = {}
-    config.setdefault("b1", 0.5)
-    config.setdefault("b2", 0.5)
+    config.setdefault("b1", 0.9)
+    config.setdefault("b2", 0.999)
     config.setdefault("m",0)
     config.setdefault("v",0)
     
@@ -57,8 +60,12 @@ def adam(w, dw, config=None):
 
     m = b1 * m + (1 - b1) * dw
     v = b2 * v + (1 - b2) * (dw**2)
+
+    #bias correct m and v
     m_hat = m / (1 - b1)
     v_hat = v / (1 - b2)
+
+    #update weights
     next_w = w - lr * m_hat / (np.sqrt(v_hat) + eps)
 
     config["m"] = m

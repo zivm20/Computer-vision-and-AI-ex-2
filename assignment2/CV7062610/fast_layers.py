@@ -1,5 +1,5 @@
 from __future__ import print_function
-
+import numpy as np
 
 try:
     from CV7062610.im2col_cython import col2im_cython, im2col_cython
@@ -12,38 +12,37 @@ except ImportError:
 
 from CV7062610.im2col import *
 
-try:
-    import cupy as cp
-    asnumpy = cp.asnumpy
-    usingNumpy = False
-    print("running on GPU mode")
-except ImportError:
-    import numpy as cp
-    asnumpy = cp.array
-    usingNumpy = True
 
-from numpy import ndarray
+def conv_forward_im2col(x, w, b, conv_param):
+    """
+    A fast implementation of the forward pass for a convolutional layer
+    based on im2col and col2im.
+    """
+    N, C, H, W = x.shape
+    num_filters, _, filter_height, filter_width = w.shape
+    stride, pad = conv_param["stride"], conv_param["pad"]
+
+    # Check dimensions
+    assert (W + 2 * pad - filter_width) % stride == 0, "width does not work"
+    assert (H + 2 * pad - filter_height) % stride == 0, "height does not work"
+
+    # Create output
+    out_height = (H + 2 * pad - filter_height) // stride + 1
+    out_width = (W + 2 * pad - filter_width) // stride + 1
+    out = np.zeros((N, num_filters, out_height, out_width), dtype=x.dtype)
+
+    # x_cols = im2col_indices(x, w.shape[2], w.shape[3], pad, stride)
+    x_cols = im2col_cython(x, w.shape[2], w.shape[3], pad, stride)
+    res = w.reshape((w.shape[0], -1)).dot(x_cols) + b.reshape(-1, 1)
+
+    out = res.reshape(w.shape[0], out.shape[2], out.shape[3], x.shape[0])
+    out = out.transpose(3, 0, 1, 2)
+
+    cache = (x, w, b, conv_param, x_cols)
+    return out, cache
 
 
-
-
-def cov(x_pad, w, b,stride,out, retCupy=False):
-    for o_H in range(out.shape[2]):
-        for o_W in range(out.shape[3]): 
-            out[:,:,o_H,o_W] = cp.einsum('nchw, fchw -> nf',x_pad[:,:,stride*o_H:stride*o_H+w.shape[2],stride*o_W:stride*o_W+w.shape[3]],w)
-    for F in range(out.shape[1]):
-        out[:,F,:,:] = out[:,F,:,:] + b[F] 
-    return out
-        
-def conv_forward_strides(x, w, b, conv_param, retCupy=False):
-    
-    retNumpy = isinstance(x,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-        w = cp.array(w)
-        b = cp.array(b)
-    
-    
+def conv_forward_strides(x, w, b, conv_param):
     N, C, H, W = x.shape
     F, _, HH, WW = w.shape
     stride, pad = conv_param["stride"], conv_param["pad"]
@@ -54,102 +53,94 @@ def conv_forward_strides(x, w, b, conv_param, retCupy=False):
 
     # Pad the input
     p = pad
-    x_padded = cp.pad(x, ((0, 0), (0, 0), (p, p), (p, p)), mode="constant")
+    x_padded = np.pad(x, ((0, 0), (0, 0), (p, p), (p, p)), mode="constant")
 
     # Figure out output dimensions
     H += 2 * pad
     W += 2 * pad
     out_h = (H - HH) // stride + 1
     out_w = (W - WW) // stride + 1
-    
-    out = cp.zeros((N,F,out_h,out_w))
-    out = cov(x_padded, w, b, stride,out)
-    
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        out = asnumpy(out)
-        x_padded = asnumpy(x_padded)
-        w = asnumpy(w)
-        b = asnumpy(b)
-    
-    cache = (x_padded, w, b, conv_param)
+
+    # Perform an im2col operation by picking clever strides
+    shape = (C, HH, WW, N, out_h, out_w)
+    strides = (H * W, W, 1, C * H * W, stride * W, stride)
+    strides = x.itemsize * np.array(strides)
+    x_stride = np.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
+    x_cols = np.ascontiguousarray(x_stride)
+    x_cols.shape = (C * HH * WW, N * out_h * out_w)
+
+    # Now all our convolutions are a big matrix multiply
+    res = w.reshape(F, -1).dot(x_cols) + b.reshape(-1, 1)
+
+    # Reshape the output
+    res.shape = (F, N, out_h, out_w)
+    out = res.transpose(1, 0, 2, 3)
+
+    # Be nice and return a contiguous array
+    # The old version of conv_forward_fast doesn't do this, so for a fair
+    # comparison we won't either
+    out = np.ascontiguousarray(out)
+
+    cache = (x, w, b, conv_param, x_cols)
     return out, cache
 
 
-def conv_backward_strides(dout,cache, retCupy=False):
-    """
-    A naive implementation of the backward pass for a convolutional layer.
+def conv_backward_strides(dout, cache):
+    x, w, b, conv_param, x_cols = cache
+    stride, pad = conv_param["stride"], conv_param["pad"]
 
-    Inputs:
-    - dout: Upstream derivatives.
-    - cache: A tuple of (x, w, b, conv_param) as in conv_forward_naive
+    N, C, H, W = x.shape
+    F, _, HH, WW = w.shape
+    _, _, out_h, out_w = dout.shape
 
-    Returns a tuple of:
-    - dx: Gradient with respect to x
-    - dw: Gradient with respect to w
-    - db: Gradient with respect to b
-    """
-    dx, dw, db = None, None, None
-    ###########################################################################
-    # TODO: Implement the convolutional backward pass.                        #
-    ###########################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    x_pad,w,b,conv_param = cache
-    retNumpy = isinstance(dout,ndarray)
-    if retNumpy and not usingNumpy:
-        x_pad = cp.array(x_pad)
-        w = cp.array(w)
-        b = cp.array(b)
-        dout = cp.array(dout) 
-    
-    
-    pad = conv_param["pad"]
-    stride = conv_param["stride"]
-    
-    x = x_pad 
-    if pad>0:
-        x=x[:,:,pad:-pad,pad:-pad]
+    db = np.sum(dout, axis=(0, 2, 3))
 
-    dw = cp.zeros_like(w)
-    dx = cp.zeros_like(x)
-    
-    for HH in range(dw.shape[2]):
-        for WW in range(dw.shape[3]): 
-            dw[:,:,HH,WW] = cp.einsum('nchw, nfhw -> fc',x_pad[:,:,HH:HH+dout.shape[2]*stride:stride,WW:WW+dout.shape[3]*stride:stride],dout)
+    dout_reshaped = dout.transpose(1, 0, 2, 3).reshape(F, -1)
+    dw = dout_reshaped.dot(x_cols.T).reshape(w.shape)
 
-    
-    dx_pad = cp.pad(dx, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="constant")
-    
-    for H in range(0,dout.shape[2]):
-        for W in range(0,dout.shape[3]):
-            dx_pad[:,:,H*stride:H*stride+w.shape[2], W*stride:W*stride+w.shape[3]] += cp.einsum('nf, fchw -> nchw',dout[:,:,H,W],w)
+    dx_cols = w.reshape(F, -1).T.dot(dout_reshaped)
+    dx_cols.shape = (C, HH, WW, N, out_h, out_w)
+    dx = col2im_6d_cython(dx_cols, N, C, H, W, HH, WW, pad, stride)
 
-    if pad>0:
-        dx=dx_pad[:,:,pad:-pad,pad:-pad]
-    else:
-        dx = dx_pad
-    
-    db = cp.sum(dout, axis=(0, 2, 3))
-
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        dx = asnumpy(dx)
-        dw = asnumpy(dw)
-        db = asnumpy(db)
-
-    
-    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
     return dx, dw, db
 
 
-    
+def conv_backward_im2col(dout, cache):
+    """
+    A fast implementation of the backward pass for a convolutional layer
+    based on im2col and col2im.
+    """
+    x, w, b, conv_param, x_cols = cache
+    stride, pad = conv_param["stride"], conv_param["pad"]
+
+    db = np.sum(dout, axis=(0, 2, 3))
+
+    num_filters, _, filter_height, filter_width = w.shape
+    dout_reshaped = dout.transpose(1, 2, 3, 0).reshape(num_filters, -1)
+    dw = dout_reshaped.dot(x_cols.T).reshape(w.shape)
+
+    dx_cols = w.reshape(num_filters, -1).T.dot(dout_reshaped)
+    # dx = col2im_indices(dx_cols, x.shape, filter_height, filter_width, pad, stride)
+    dx = col2im_cython(
+        dx_cols,
+        x.shape[0],
+        x.shape[1],
+        x.shape[2],
+        x.shape[3],
+        filter_height,
+        filter_width,
+        pad,
+        stride,
+    )
+
+    return dx, dw, db
+
 
 conv_forward_fast = conv_forward_strides
 conv_backward_fast = conv_backward_strides
 
 
-def max_pool_forward_fast(x, pool_param, retCupy=False):
+def max_pool_forward_fast(x, pool_param):
     """
     A fast implementation of the forward pass for a max pooling layer.
 
@@ -158,299 +149,135 @@ def max_pool_forward_fast(x, pool_param, retCupy=False):
     method which is very fast. Otherwise we fall back on the im2col method, which
     is not much faster than the naive method.
     """
-    retNumpy = isinstance(x,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-    
     N, C, H, W = x.shape
     pool_height, pool_width = pool_param["pool_height"], pool_param["pool_width"]
     stride = pool_param["stride"]
-    out = cp.zeros((N,C,1+(H-pool_height)//stride,1+(W-pool_width)//stride))
-    
-    
-    for o_H in range(out.shape[2]):
-        for o_W in range(out.shape[3]):
-            out[:,:,o_H,o_W] = cp.max(cp.max(x[:,:,o_H*stride:o_H*stride + pool_height, o_W*stride:o_W*stride + pool_width],axis=2),axis=2)
-            
-            
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        out = cp.asnumpy(out)
-        x = cp.asnumpy(x)
 
-
-    return out, (x,pool_param)
-
-
-
-
-def relu_forward_fast(x, retCupy=False):
-    """
-    Computes the forward pass for a layer of rectified linear units (ReLUs).
-
-    Input:
-    - x: Inputs, of any shape
-
-    Returns a tuple of:
-    - out: Output, of the same shape as x
-    - cache: x
-    """
-    out = None
-    ###########################################################################
-    # TODO: Implement the ReLU forward pass.                                  #
-    ###########################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    retNumpy = isinstance(x,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-
-    out = cp.maximum(x,0)
-
-    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        x = asnumpy(x)
-        out = asnumpy(x)
-
-    cache = x
+    same_size = pool_height == pool_width == stride
+    tiles = H % pool_height == 0 and W % pool_width == 0
+    if same_size and tiles:
+        out, reshape_cache = max_pool_forward_reshape(x, pool_param)
+        cache = ("reshape", reshape_cache)
+    else:
+        out, im2col_cache = max_pool_forward_im2col(x, pool_param)
+        cache = ("im2col", im2col_cache)
     return out, cache
 
-#@njit(parallel=True)
-def relu_backward_fast(dout, cache, retCupy=False):
-    """
-    Computes the backward pass for a layer of rectified linear units (ReLUs).
 
-    Input:
-    - dout: Upstream derivatives, of any shape
-    - cache: Input x, of same shape as dout
-
-    Returns:
-    - dx: Gradient with respect to x
-    """
-    dx, x = None, cache
-    
-    retNumpy = isinstance(dout,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-        dout = cp.array(dout)
-    
-    dx = dout * (x>=0)
-
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        dx = asnumpy(dx)
-
-  
-    return dx
-
-
-
-def max_pool_backward_fast(dout, cache, retCupy=False):
+def max_pool_backward_fast(dout, cache):
     """
     A fast implementation of the backward pass for a max pooling layer.
 
     This switches between the reshape method an the im2col method depending on
     which method was used to generate the cache.
     """
-    x, pool_param = cache
-    retNumpy = isinstance(dout,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-        dout = cp.array(dout)
-    
-    
-    dx = cp.zeros_like(x)
-    pH = pool_param['pool_height']
-    pW = pool_param['pool_width']
-    stride = pool_param['stride']
-    
-    for H in range(dout.shape[2]):
-        for W in range(dout.shape[3]):
-            pool = x[:,:,H*stride:H*stride + pH, W*stride:W*stride + pW]
-            
-            mask = (pool == cp.max(cp.max(pool, axis=3, keepdims=True),axis=2,keepdims=True))
-            dx[:,:,H*stride:H*stride+pH,W*stride:W*stride+pW] += mask*dout[:,:,H,W][:,:,cp.newaxis,cp.newaxis]
-    
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        dx = asnumpy(dx)
+    method, real_cache = cache
+    if method == "reshape":
+        return max_pool_backward_reshape(dout, real_cache)
+    elif method == "im2col":
+        return max_pool_backward_im2col(dout, real_cache)
+    else:
+        raise ValueError('Unrecognized method "%s"' % method)
+
+
+def max_pool_forward_reshape(x, pool_param):
+    """
+    A fast implementation of the forward pass for the max pooling layer that uses
+    some clever reshaping.
+
+    This can only be used for square pooling regions that tile the input.
+    """
+    N, C, H, W = x.shape
+    pool_height, pool_width = pool_param["pool_height"], pool_param["pool_width"]
+    stride = pool_param["stride"]
+    assert pool_height == pool_width == stride, "Invalid pool params"
+    assert H % pool_height == 0
+    assert W % pool_height == 0
+    x_reshaped = x.reshape(
+        N, C, H // pool_height, pool_height, W // pool_width, pool_width
+    )
+    out = x_reshaped.max(axis=3).max(axis=4)
+
+    cache = (x, x_reshaped, out)
+    return out, cache
+
+
+def max_pool_backward_reshape(dout, cache):
+    """
+    A fast implementation of the backward pass for the max pooling layer that
+    uses some clever broadcasting and reshaping.
+
+    This can only be used if the forward pass was computed using
+    max_pool_forward_reshape.
+
+    NOTE: If there are multiple argmaxes, this method will assign gradient to
+    ALL argmax elements of the input rather than picking one. In this case the
+    gradient will actually be incorrect. However this is unlikely to occur in
+    practice, so it shouldn't matter much. One possible solution is to split the
+    upstream gradient equally among all argmax elements; this should result in a
+    valid subgradient. You can make this happen by uncommenting the line below;
+    however this results in a significant performance penalty (about 40% slower)
+    and is unlikely to matter in practice so we don't do it.
+    """
+    x, x_reshaped, out = cache
+
+    dx_reshaped = np.zeros_like(x_reshaped)
+    out_newaxis = out[:, :, :, np.newaxis, :, np.newaxis]
+    mask = x_reshaped == out_newaxis
+    dout_newaxis = dout[:, :, :, np.newaxis, :, np.newaxis]
+    dout_broadcast, _ = np.broadcast_arrays(dout_newaxis, dx_reshaped)
+    dx_reshaped[mask] = dout_broadcast[mask]
+    dx_reshaped /= np.sum(mask, axis=(3, 5), keepdims=True)
+    dx = dx_reshaped.reshape(x.shape)
 
     return dx
 
 
-
-
-
-
-
-
-
-def affine_forward_fast(x, w, b, retCupy=False):
+def max_pool_forward_im2col(x, pool_param):
     """
-    Computes the forward pass for an affine (fully-connected) layer.
+    An implementation of the forward pass for max pooling based on im2col.
 
-    The input x has shape (N, d_1, ..., d_k) and contains a minibatch of N
-    examples, where each example x[i] has shape (d_1, ..., d_k). We will
-    reshape each input into a vector of dimension D = d_1 * ... * d_k, and
-    then transform it to an output vector of dimension M.
-
-    Inputs:
-    - x: A numpy array containing input data, of shape (N, d_1, ..., d_k)
-    - w: A numpy array of weights, of shape (D, M)
-    - b: A numpy array of biases, of shape (M,)
-
-    Returns a tuple of:
-    - out: output, of shape (N, M)
-    - cache: (x, w, b)
+    This isn't much faster than the naive version, so it should be avoided if
+    possible.
     """
-    out = None
-    ###########################################################################
-    # TODO: Implement the affine forward pass. Store the result in out. You   #
-    # will need to reshape the input into rows.                               #
-    ###########################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    retNumpy = isinstance(x,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-        w = cp.array(w)
-        b = cp.array(b)
-        
+    N, C, H, W = x.shape
+    pool_height, pool_width = pool_param["pool_height"], pool_param["pool_width"]
+    stride = pool_param["stride"]
 
+    assert (H - pool_height) % stride == 0, "Invalid height"
+    assert (W - pool_width) % stride == 0, "Invalid width"
 
-    #reshape x into the (N,D) and then compute the output using matrix multiplication    
-    out = (cp.reshape(x,(x.shape[0],w.shape[0])) @ w) + b
-    
+    out_height = (H - pool_height) // stride + 1
+    out_width = (W - pool_width) // stride + 1
 
-    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        x = asnumpy(x)
-        w = asnumpy(w)
-        b = asnumpy(b)
-        out = asnumpy
+    x_split = x.reshape(N * C, 1, H, W)
+    x_cols = im2col(x_split, pool_height, pool_width, padding=0, stride=stride)
+    x_cols_argmax = np.argmax(x_cols, axis=0)
+    x_cols_max = x_cols[x_cols_argmax, np.arange(x_cols.shape[1])]
+    out = x_cols_max.reshape(out_height, out_width, N, C).transpose(2, 3, 0, 1)
 
-    cache = (x, w, b)
+    cache = (x, x_cols, x_cols_argmax, pool_param)
     return out, cache
 
-#@njit(parallel=True)
-def affine_backward_fast(dout, cache, retCupy=False):
+
+def max_pool_backward_im2col(dout, cache):
     """
-    Computes the backward pass for an affine layer.
+    An implementation of the backward pass for max pooling based on im2col.
 
-    Inputs:
-    - dout: Upstream derivative, of shape (N, M)
-    - cache: Tuple of:
-      - x: Input data, of shape (N, d_1, ... d_k)
-      - w: Weights, of shape (D, M)
-      - b: Biases, of shape (M,)
-
-    Returns a tuple of:
-    - dx: Gradient with respect to x, of shape (N, d1, ..., d_k)
-    - dw: Gradient with respect to w, of shape (D, M)
-    - db: Gradient with respect to b, of shape (M,)
+    This isn't much faster than the naive version, so it should be avoided if
+    possible.
     """
-    x, w, b = cache
+    x, x_cols, x_cols_argmax, pool_param = cache
+    N, C, H, W = x.shape
+    pool_height, pool_width = pool_param["pool_height"], pool_param["pool_width"]
+    stride = pool_param["stride"]
 
-    retNumpy = isinstance(dout,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-        w = cp.array(w)
-        
-        dout = cp.array(x)
+    dout_reshaped = dout.transpose(2, 3, 0, 1).flatten()
+    dx_cols = np.zeros_like(x_cols)
+    dx_cols[x_cols_argmax, np.arange(dx_cols.shape[1])] = dout_reshaped
+    dx = col2im_indices(
+        dx_cols, (N * C, 1, H, W), pool_height, pool_width, padding=0, stride=stride
+    )
+    dx = dx.reshape(x.shape)
 
-
-    dx, dw, db = None, None, None
-    ###########################################################################
-    # TODO: Implement the affine backward pass.                               #
-    ###########################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    
-    # out = f(x,w,b) = x@w + b -> z = x@w -> out = z + b
-    # dout/db = 1
-    db = cp.ones(dout.shape[0]) @ dout#/dout.shape[0]
-
-    # dout/dw = dz/dw * dout/dz, dout/dz = 1 
-    # dz/dw = x
-    dw = cp.reshape(x,(x.shape[0],w.shape[0])).T@dout#/dout.shape[0]
-
-    # dout/dx = dz/dx * dout/dz, dout/dz = 1 
-    # dz/dx = w
-    dx = cp.reshape(dout@w.T,x.shape)#/dout.shape[1]
-    
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        dx = asnumpy(dx)
-        dw = asnumpy(dw)
-        db = asnumpy(db)
-
-    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
-    return dx, dw, db
-
-#@njit(parallel=True)
-def relu_forward_fast(x, retCupy=False):
-    """
-    Computes the forward pass for a layer of rectified linear units (ReLUs).
-
-    Input:
-    - x: Inputs, of any shape
-
-    Returns a tuple of:
-    - out: Output, of the same shape as x
-    - cache: x
-    """
-    out = None
-    ###########################################################################
-    # TODO: Implement the ReLU forward pass.                                  #
-    ###########################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    retNumpy = isinstance(x,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-
-    out = cp.maximum(x,0)
-
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        x = asnumpy(x)
-       
-    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
-    cache = x
-    return out, cache
-
-#@njit(parallel=True)
-def relu_backward_fast(dout, cache, retCupy=False):
-    """
-    Computes the backward pass for a layer of rectified linear units (ReLUs).
-
-    Input:
-    - dout: Upstream derivatives, of any shape
-    - cache: Input x, of same shape as dout
-
-    Returns:
-    - dx: Gradient with respect to x
-    """
-    dx, x = None, cache
-    ###########################################################################
-    # TODO: Implement the ReLU backward pass.                                 #
-    ###########################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    retNumpy = isinstance(dout,ndarray)
-    if retNumpy and not usingNumpy:
-        x = cp.array(x)
-        dout = cp.array(x)
-    
-    dx = dout * (x>=0)
-    
-    
-    if (retNumpy and not usingNumpy) and retCupy == retNumpy:
-        dx = asnumpy(dx)
-    # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
     return dx
